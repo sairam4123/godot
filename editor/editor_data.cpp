@@ -915,7 +915,7 @@ bool EditorData::script_class_is_parent(const StringName &p_class, const StringN
 		return false;
 	}
 	String base = script_class_get_base(p_class);
-	Ref<Script> script = script_class_load_script(p_class);
+	Ref<Script> script = ScriptServer::get_global_class_script(p_class);
 	Ref<Script> base_script = script->get_base_script();
 
 	while (p_inherits != base) {
@@ -933,7 +933,11 @@ bool EditorData::script_class_is_parent(const StringName &p_class, const StringN
 }
 
 StringName EditorData::script_class_get_base(const StringName &p_class) const {
-	Ref<Script> script = script_class_load_script(p_class);
+	if (!ScriptServer::is_global_class(p_class)) {
+		return StringName();
+	}
+
+	Ref<Script> script = ScriptServer::get_global_class_script(p_class);
 	if (script.is_null()) {
 		return StringName();
 	}
@@ -943,14 +947,14 @@ StringName EditorData::script_class_get_base(const StringName &p_class) const {
 		return ScriptServer::get_global_class_native_base(p_class);
 	}
 
-	return script_class_get_name(base_script->get_path());
+	return ScriptServer::get_global_class_name(base_script->get_path());
 }
 
 Variant EditorData::script_class_instance(const StringName &p_class) const {
 	if (ScriptServer::is_global_class(p_class)) {
 		Variant obj = ClassDB::instantiate(ScriptServer::get_global_class_native_base(p_class));
 		if (obj) {
-			Ref<Script> script = script_class_load_script(p_class);
+			Ref<Script> script = ScriptServer::get_global_class_script(p_class);
 			if (script.is_valid()) {
 				((Object *)obj)->set_script(script);
 			}
@@ -958,15 +962,6 @@ Variant EditorData::script_class_instance(const StringName &p_class) const {
 		}
 	}
 	return Variant();
-}
-
-Ref<Script> EditorData::script_class_load_script(const StringName &p_class) const {
-	if (!ScriptServer::is_global_class(p_class)) {
-		return Ref<Script>();
-	}
-
-	String path = ScriptServer::get_global_class_path(p_class);
-	return ResourceLoader::load(path, "Script");
 }
 
 void EditorData::script_class_set_icon_path(const StringName &p_class, const String &p_icon_path) {
@@ -992,7 +987,7 @@ String EditorData::script_class_get_icon_path(const StringName &p_class) const {
 }
 
 Ref<Script> EditorData::script_class_get_base_from_anonymous_path(const String &p_path) const {
-	StringName name = script_class_get_name(p_path);
+	StringName name = ScriptServer::get_global_class_name(p_path);
 	if (name != StringName()) {
 		return NULL;
 	}
@@ -1001,7 +996,7 @@ Ref<Script> EditorData::script_class_get_base_from_anonymous_path(const String &
 		return NULL;
 	}
 	do {
-		if (script_class_get_name(script->get_path()) != StringName()) {
+		if (ScriptServer::get_global_class_name(script->get_path()) != StringName()) {
 			return script;
 		}
 		if (script->get_path().find("::") != -1) {
@@ -1010,14 +1005,6 @@ Ref<Script> EditorData::script_class_get_base_from_anonymous_path(const String &
 		script = script->get_base_script();
 	} while (script.is_valid());
 	return NULL;
-}
-
-StringName EditorData::script_class_get_name(const String &p_path) const {
-	return _script_class_file_to_path.has(p_path) ? _script_class_file_to_path[p_path] : StringName();
-}
-
-void EditorData::script_class_set_name(const String &p_path, const StringName &p_class) {
-	_script_class_file_to_path[p_path] = p_class;
 }
 
 void EditorData::script_class_save_icon_paths() {
@@ -1060,9 +1047,6 @@ void EditorData::script_class_load_icon_paths() {
 		for (const Variant &E : keys) {
 			String name = E.operator String();
 			_script_class_icon_paths[name] = d[name];
-
-			String path = ScriptServer::get_global_class_path(name);
-			script_class_set_name(path, name);
 		}
 	}
 }

@@ -576,23 +576,65 @@ void SceneTreeDock::_tool_selected(int p_tool, bool p_confirm_override) {
 				return;
 			}
 
-			editor_data->get_undo_redo().create_action(TTR("Detach Script"));
-			editor_data->get_undo_redo().add_do_method(editor, "push_item", (Script *)nullptr);
+			Array update_array;
+			EditorData &ed = EditorNode::get_editor_data();
 
 			for (int i = 0; i < selection.size(); i++) {
 				Node *n = Object::cast_to<Node>(selection[i]);
 				Ref<Script> existing = n->get_script();
-				Ref<Script> empty = EditorNode::get_singleton()->get_object_custom_type_base(n);
-				if (existing != empty) {
-					editor_data->get_undo_redo().add_do_method(n, "set_script", empty);
-					editor_data->get_undo_redo().add_undo_method(n, "set_script", existing);
+				Ref<Script> base = NULL;
+				if (existing.is_valid()) {
+					StringName script_class_name = ScriptServer::get_global_class_name(existing->get_path());
+					if (script_class_name != StringName()) {
+						update_array.clear();
+						print_error(vformat("Unable to remove script class '%s'. Can only remove anonymous scripts.", script_class_name));
+						break;
+					}
+					base = ed.script_class_get_base_from_anonymous_path(existing->get_path());
+					if (base.is_null()) {
+						const Map<String, Vector<EditorData::CustomType>> &ct = EditorNode::get_editor_data().get_custom_types();
+						if (ct.has(n->get_class())) {
+							const Vector<EditorData::CustomType> &v = ct[n->get_class()];
+							String ct_name;
+							for (int j = 0; j < v.size() && !ct_name.is_empty(); j++) {
+								if (v[j].script == existing) {
+									ct_name = v[j].name;
+								}
+							}
+							if (!ct_name.is_empty()) {
+								update_array.clear();
+								print_error(vformat("Unable to remove custom type '%s'. Can only remove anonymous scripts.", ct_name));
+								break;
+							}
+						}
+						base = EditorNode::get_singleton()->get_object_custom_type_base(n);
+					}
+				}
+				if (existing != base) {
+					Array an_update;
+					an_update.push_back(n);
+					an_update.push_back(base);
+					an_update.push_back(existing);
+					update_array.push_back(an_update);
 				}
 			}
 
-			editor_data->get_undo_redo().add_do_method(this, "_update_script_button");
-			editor_data->get_undo_redo().add_undo_method(this, "_update_script_button");
+			if (update_array.size()) {
+				editor_data->get_undo_redo().create_action(TTR("Detach Script"));
+				editor_data->get_undo_redo().add_do_method(editor, "push_item", (Script *)NULL);
+				for (int i = 0; i < update_array.size(); i++) {
+					Array an_update = update_array[i];
+					Node *n = an_update[0];
+					Ref<Script> do_script = an_update[1];
+					Ref<Script> undo_script = an_update[2];
+					editor_data->get_undo_redo().add_do_method(n, "set_script", do_script);
+					editor_data->get_undo_redo().add_undo_method(n, "set_script", undo_script);
+				}
+				editor_data->get_undo_redo().add_do_method(this, "_update_script_button");
+				editor_data->get_undo_redo().add_undo_method(this, "_update_script_button");
 
-			editor_data->get_undo_redo().commit_action();
+				editor_data->get_undo_redo().commit_action();
+			}
 		} break;
 		case TOOL_MOVE_UP:
 		case TOOL_MOVE_DOWN: {
@@ -1110,10 +1152,8 @@ void SceneTreeDock::_tool_selected(int p_tool, bool p_confirm_override) {
 			if (TOOL_CREATE_FAVORITE == p_tool) {
 				String name = selected_favorite_root.get_slicec(' ', 0);
 				if (ScriptServer::is_global_class(name)) {
-					new_node = Object::cast_to<Node>(ClassDB::instantiate(ScriptServer::get_global_class_native_base(name)));
-					Ref<Script> script = ResourceLoader::load(ScriptServer::get_global_class_path(name), "Script");
-					if (new_node && script.is_valid()) {
-						new_node->set_script(script);
+					new_node = Object::cast_to<Node>(ScriptServer::instantiate_global_class(name));
+					if (new_node) {
 						new_node->set_name(name);
 					}
 				} else {
@@ -1222,6 +1262,7 @@ void SceneTreeDock::_notification(int p_what) {
 			button_add->set_icon(get_theme_icon(SNAME("Add"), SNAME("EditorIcons")));
 			button_instance->set_icon(get_theme_icon(SNAME("Instance"), SNAME("EditorIcons")));
 			button_create_script->set_icon(get_theme_icon(SNAME("ScriptCreate"), SNAME("EditorIcons")));
+			button_extend_script->set_icon(get_theme_icon(SNAME("ScriptExtend"), SNAME("EditorIcons")));
 			button_detach_script->set_icon(get_theme_icon(SNAME("ScriptRemove"), SNAME("EditorIcons")));
 			button_tree_menu->set_icon(get_theme_icon(SNAME("GuiTabMenuHl"), SNAME("EditorIcons")));
 
@@ -1303,6 +1344,7 @@ void SceneTreeDock::_notification(int p_what) {
 			button_add->set_icon(get_theme_icon(SNAME("Add"), SNAME("EditorIcons")));
 			button_instance->set_icon(get_theme_icon(SNAME("Instance"), SNAME("EditorIcons")));
 			button_create_script->set_icon(get_theme_icon(SNAME("ScriptCreate"), SNAME("EditorIcons")));
+			button_extend_script->set_icon(get_theme_icon(SNAME("ScriptExtend"), SNAME("EditorIcons")));
 			button_detach_script->set_icon(get_theme_icon(SNAME("ScriptRemove"), SNAME("EditorIcons")));
 			button_2d->set_icon(get_theme_icon(SNAME("Node2D"), SNAME("EditorIcons")));
 			button_3d->set_icon(get_theme_icon(SNAME("Node3D"), SNAME("EditorIcons")));
@@ -2103,29 +2145,48 @@ void SceneTreeDock::_delete_confirm(bool p_cut) {
 void SceneTreeDock::_update_script_button() {
 	if (!profile_allow_script_editing) {
 		button_create_script->hide();
+		button_extend_script->hide();
 		button_detach_script->hide();
 	} else if (editor_selection->get_selection().size() == 0) {
 		button_create_script->hide();
+		button_extend_script->hide();
 		button_detach_script->hide();
 	} else if (editor_selection->get_selection().size() == 1) {
 		Node *n = editor_selection->get_selected_node_list()[0];
-		if (n->get_script().is_null()) {
-			button_create_script->show();
-			button_detach_script->hide();
+		Ref<Script> s = n->get_script();
+		if (s.is_valid()) {
+			if (ScriptServer::get_global_class_name(s->get_path()) != StringName()) {
+				button_create_script->hide();
+				button_extend_script->show();
+				button_detach_script->hide();
+			} else {
+				button_create_script->hide();
+				button_extend_script->hide();
+				button_detach_script->show();
+			}
 		} else {
-			button_create_script->hide();
-			button_detach_script->show();
+			button_create_script->show();
+			button_extend_script->hide();
+			button_detach_script->hide();
 		}
 	} else {
 		button_create_script->hide();
 		Array selection = editor_selection->get_selected_nodes();
 		for (int i = 0; i < selection.size(); i++) {
 			Node *n = Object::cast_to<Node>(selection[i]);
-			if (!n->get_script().is_null()) {
-				button_detach_script->show();
+			Ref<Script> s = n->get_script();
+			if (s.is_valid()) {
+				if (ScriptServer::get_global_class_name(s->get_path()) != StringName()) {
+					button_extend_script->show();
+					button_detach_script->hide();
+				} else {
+					button_extend_script->hide();
+					button_detach_script->show();
+				}
 				return;
 			}
 		}
+		button_extend_script->hide();
 		button_detach_script->hide();
 	}
 }
@@ -2300,6 +2361,11 @@ void SceneTreeDock::replace_node(Node *p_node, Node *p_by_node, bool p_keep_prop
 		Node *default_oldnode = Object::cast_to<Node>(ClassDB::instantiate(n->get_class()));
 		List<PropertyInfo> pinfo;
 		n->get_property_list(&pinfo);
+
+		Ref<Script> s = n->get_script();
+		if (s.is_valid() && ScriptServer::get_global_class_name(s->get_path()) != StringName()) {
+			n->set_script(Variant());
+		}
 
 		for (const PropertyInfo &E : pinfo) {
 			if (!(E.usage & PROPERTY_USAGE_STORAGE)) {
@@ -2701,7 +2767,8 @@ void SceneTreeDock::_tree_rmb(const Vector2 &p_menu_pos) {
 
 		existing_script = selected->get_script();
 
-		if (EditorNode::get_singleton()->get_object_custom_type_base(selected) == existing_script) {
+		if (EditorNode::get_singleton()->get_object_custom_type_base(selected) == existing_script ||
+				(existing_script.is_valid() && ScriptServer::get_global_class_name(existing_script->get_path()) != StringName())) {
 			existing_script_removable = false;
 		}
 	}
@@ -2915,7 +2982,7 @@ void SceneTreeDock::attach_script_to_selected(bool p_extend) {
 		for (int i = 0; i < ScriptServer::get_language_count(); i++) {
 			ScriptLanguage *l = ScriptServer::get_language(i);
 			if (l->get_type() == existing->get_class()) {
-				String name = l->get_global_class_name(existing->get_path());
+				String name = ScriptServer::get_global_class_name(existing->get_path());
 				if (ScriptServer::is_global_class(name) && EDITOR_GET("interface/editors/derive_script_globals_by_name").operator bool()) {
 					inherits = name;
 				} else if (l->can_inherit_from_file()) {
@@ -3280,6 +3347,14 @@ SceneTreeDock::SceneTreeDock(EditorNode *p_editor, Node *p_scene_root, EditorSel
 	filter_hbc->add_child(button_create_script);
 	button_create_script->hide();
 
+	button_extend_script = memnew(Button);
+	button_create_script->set_flat(true);
+	button_extend_script->connect("pressed", callable_mp(this, &SceneTreeDock::_tool_selected), make_binds(TOOL_EXTEND_SCRIPT, false));
+	button_extend_script->set_tooltip(TTR("Attach a new script extending the selected node's script."));
+	button_extend_script->set_shortcut(ED_GET_SHORTCUT("scene_tree/extend_script"));
+	filter_hbc->add_child(button_extend_script);
+	button_extend_script->hide();
+
 	button_detach_script = memnew(Button);
 	button_detach_script->set_flat(true);
 	button_detach_script->connect("pressed", callable_mp(this, &SceneTreeDock::_tool_selected), make_binds(TOOL_DETACH_SCRIPT, false));
@@ -3421,6 +3496,7 @@ SceneTreeDock::SceneTreeDock(EditorNode *p_editor, Node *p_scene_root, EditorSel
 
 	EDITOR_DEF("interface/editors/show_scene_tree_root_selection", true);
 	EDITOR_DEF("interface/editors/derive_script_globals_by_name", true);
+	EDITOR_DEF("interface/editors/create_dialog_hide_script_class_filepath", false);
 	EDITOR_DEF("_use_favorites_root_selection", false);
 
 	Resource::_update_configuration_warning = _update_configuration_warning;

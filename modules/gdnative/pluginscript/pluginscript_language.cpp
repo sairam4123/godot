@@ -159,6 +159,10 @@ bool PluginScriptLanguage::can_inherit_from_file() const {
 	return _desc.can_inherit_from_file;
 }
 
+bool PluginScriptLanguage::has_delayed_script_class_metadata() const {
+	return _desc.has_delayed_script_class_metadata;
+}
+
 int PluginScriptLanguage::find_function(const String &p_function, const String &p_code) const {
 	if (_desc.find_function) {
 		return _desc.find_function(_data, (godot_string *)&p_function, (godot_string *)&p_code);
@@ -415,13 +419,13 @@ void PluginScriptLanguage::reload_tool_script(const Ref<Script> &p_script, bool 
 #endif
 }
 
-bool PluginScriptLanguage::handles_global_class_type(const String &p_type) const {
-	return p_type == "PluginScript";
+bool PluginScriptLanguage::handles_global_class_type(const StringName &p_type) const {
+	return p_type == SNAME("PluginScript");
 }
 
-String PluginScriptLanguage::get_global_class_name(const String &p_path, String *r_base_type, String *r_icon_path) const {
+StringName PluginScriptLanguage::get_global_class_name(const String &p_path, StringName *r_base_type, String *r_icon_path) const {
 	if (!p_path.is_empty()) {
-		Ref<PluginScript> script = ResourceLoader::load(p_path, "PluginScript");
+		Ref<PluginScript> script = ResourceLoader::load(p_path, PluginScript::get_class_static());
 		if (script.is_valid()) {
 			if (r_base_type) {
 				*r_base_type = script->get_instance_base_type();
@@ -432,13 +436,13 @@ String PluginScriptLanguage::get_global_class_name(const String &p_path, String 
 			return script->get_script_class_name();
 		}
 		if (r_base_type) {
-			*r_base_type = String();
+			*r_base_type = StringName();
 		}
 		if (r_icon_path) {
 			*r_icon_path = String();
 		}
 	}
-	return String();
+	return StringName();
 }
 
 void PluginScriptLanguage::lock() {

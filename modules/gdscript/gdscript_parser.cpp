@@ -42,6 +42,7 @@
 #endif // DEBUG_ENABLED
 
 #ifdef TOOLS_ENABLED
+#include "editor/editor_node.h"
 #include "editor/editor_settings.h"
 #endif // TOOLS_ENABLED
 
@@ -3417,7 +3418,7 @@ bool GDScriptParser::export_annotations(const AnnotationNode *p_annotation, Node
 
 	variable->export_info.hint_string = hint_string;
 
-	// This is called after tne analyzer is done finding the type, so this should be set here.
+	// This is called after the analyzer is done finding the type, so this should be set here.
 	DataType export_type = variable->get_datatype();
 
 	if (p_annotation->name == "@export") {
@@ -3471,8 +3472,33 @@ bool GDScriptParser::export_annotations(const AnnotationNode *p_annotation, Node
 
 				variable->export_info.hint_string = enum_hint_string;
 			} break;
+			case GDScriptParser::DataType::CLASS: {
+				// Can assume type is a global GDScript class.
+				if (!ClassDB::is_parent_class(export_type.native_type, "Resource")) {
+					push_error(R"(Exported script type must extend Resource.)", variable);
+					return false;
+				}
+				variable->export_info.type = Variant::OBJECT;
+				variable->export_info.hint = PROPERTY_HINT_RESOURCE_TYPE;
+				variable->export_info.hint_string = export_type.class_type->identifier->name;
+			} break;
+			case GDScriptParser::DataType::SCRIPT: {
+				StringName script_name = ScriptServer::get_global_class_name(export_type.script_path);
+				if (ScriptServer::is_global_class(script_name)) {
+					StringName native = ScriptServer::get_global_class_native_base(script_name);
+					if (!ClassDB::is_parent_class(native, "Resource")) {
+						push_error(R"(Exported script type must extend Resource.)", variable);
+						return false;
+					}
+					variable->export_info.type = Variant::OBJECT;
+					variable->export_info.hint = PROPERTY_HINT_RESOURCE_TYPE;
+					variable->export_info.hint_string = script_name;
+				} else {
+					push_error(R"(Exported script type has no global class name.)", variable);
+					return false;
+				}
+			} break;
 			default:
-				// TODO: Allow custom user resources.
 				push_error(R"(Export type can only be built-in, a resource, or an enum.)", variable);
 				break;
 		}
